@@ -577,6 +577,24 @@ func anyTablesCompacting(inputs manifest.LevelSlice) bool {
 	return false
 }
 
+func newCompactionPicker(
+	v *version,
+	virtualBackings *manifest.VirtualBackings,
+	opts *Options,
+	inProgressCompactions []compactionInfo,
+) compactionPicker {
+	if opts.Experimental.EnableUniversalCompaction {
+		p := &compactionPickerUniversal{
+			opts: opts,
+			vers: v,
+		}
+		return p
+	} else {
+		return newCompactionPickerByScore(v, virtualBackings, opts, inProgressCompactions)
+	}
+
+}
+
 // newCompactionPickerByScore creates a compactionPickerByScore associated with
 // the newest version. The picker is used under logLock (until a new version is
 // installed).

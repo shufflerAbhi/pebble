@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cockroachdb/pebble/internal/base"
 	"github.com/cockroachdb/pebble/internal/manifest"
 )
 
@@ -25,9 +26,6 @@ type compactionPickerUniversal struct {
 	// The sorted runs used for compaction picking
 	sortedRuns []sortedRunInfo
 }
-
-// TODO: Enforce that compactionPickerUniversal implements compactionPicker
-// interface
 
 // A struct to hold a file along with its level in the
 // LSM tree.
@@ -313,8 +311,25 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 	// in L0 may not form a continuous slice within level 0. So we manually
 	// create a LevelSlice with the files in L0 that we pick for compaction.
 	i := startIndex
+	firstFileAdded := false
 	l0Files := make([]*manifest.FileMetadata, 0)
+
 	for ; i <= endIndex && p.sortedRuns[i].level == 0; i++ {
+		file := p.sortedRuns[i].file
+
+		// Keep track of the key range bounds as we iterate through the files
+		if !firstFileAdded {
+			firstFileAdded = true
+			pc.smallest, pc.largest = file.Smallest, file.Largest
+		} else {
+			if base.InternalCompare(p.opts.Comparer.Compare, pc.smallest, file.Smallest) >= 0 {
+				pc.smallest = file.Smallest
+			}
+			if base.InternalCompare(p.opts.Comparer.Compare, pc.largest, file.Largest) <= 0 {
+				pc.largest = file.Largest
+			}
+		}
+
 		l0Files = append(l0Files, p.sortedRuns[i].file)
 	}
 
@@ -330,6 +345,7 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 
 	// Proceed with the sorted runs in level > 0. Each level
 	// is a sorted run and has a separate compactionLevel object
+	levelIters := make([]manifest.LevelIterator, 0)
 	for i <= endIndex {
 		cl := compactionLevel{
 			level: p.sortedRuns[i].level,
@@ -339,6 +355,23 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 			files: p.vers.Levels[p.sortedRuns[i].level].Slice(),
 		}
 		inputs = append(inputs, cl)
+		levelIters = append(levelIters, p.vers.Levels[p.sortedRuns[i].level].Iter())
+	}
+
+	// Update the key range bounds based on the level > 0 files added
+	if len(levelIters) > 0 {
+		smallest, largest := manifest.KeyRange(p.opts.Comparer.Compare, levelIters...)
+		if !firstFileAdded {
+			firstFileAdded = true
+			pc.smallest, pc.largest = smallest, largest
+		} else {
+			if base.InternalCompare(p.opts.Comparer.Compare, pc.smallest, smallest) >= 0 {
+				pc.smallest = smallest
+			}
+			if base.InternalCompare(p.opts.Comparer.Compare, pc.largest, largest) <= 0 {
+				pc.largest = largest
+			}
+		}
 	}
 
 	if len(inputs) == 0 {
@@ -361,8 +394,52 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 		pc.extraLevels = extraLevels
 	}
 
-	// TODO: Set up compaction kind, metrics and any other remaining fields
+	pc.kind = compactionKindUniversalPeriodic
+
+	// TODO: Verify if we need to set any of these fields to be set
+	// We are not setting the following fields because they don't seem to
+	// be used outside the picker logic
+	// pc.score, pc.lcf
+	// pc.pickerMetrics is used in compaction.go, but it seems to be
+	// used just for information purposes and we would just see zero
+	// values for its fields.
 
 	return pc
 
+}
+
+// Enforce at compile time that compactionPickerUniversal
+// implements compactionPicker interface
+var _ compactionPicker = &compactionPickerUniversal{}
+
+// Many methods in the compactionPicker interface are irrelevant
+// to Universal compaction. We just panic if these methods
+// are invoked with a Universal Compaction picker instance
+
+func (p *compactionPickerUniversal) estimatedCompactionDebt(l0ExtraSize uint64) uint64 {
+	panic("unimplemented")
+}
+
+func (p *compactionPickerUniversal) forceBaseLevel1() {
+	panic("unimplemented")
+}
+
+func (p *compactionPickerUniversal) getBaseLevel() int {
+	panic("unimplemented")
+}
+
+func (p *compactionPickerUniversal) getScores([]compactionInfo) [7]float64 {
+	panic("unimplemented")
+}
+
+func (p *compactionPickerUniversal) pickElisionOnlyCompaction(env compactionEnv) (pc *pickedCompaction) {
+	panic("unimplemented")
+}
+
+func (p *compactionPickerUniversal) pickReadTriggeredCompaction(env compactionEnv) (pc *pickedCompaction) {
+	panic("unimplemented")
+}
+
+func (p *compactionPickerUniversal) pickRewriteCompaction(env compactionEnv) (pc *pickedCompaction) {
+	panic("unimplemented")
 }
