@@ -165,7 +165,7 @@ func (p *compactionPickerUniversal) computeFilesMarkedForPeriodicCompaction() {
 	// For now, hardcode a value for the value for the periodic compaction
 	// interval
 	// [TODO] Add this to options
-	periodicCompactionsSeconds := int64(1)
+	periodicCompactionsSeconds := int64(3)
 
 	// Clear the current slice of files
 	p.filesMarkedForPeriodicCompaction = []levelFileMetadata{}

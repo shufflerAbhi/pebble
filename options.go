@@ -1196,7 +1196,7 @@ func (o *Options) EnsureDefaults() *Options {
 		o.MaxOpenFiles = 1000
 	}
 	if o.MemTableSize <= 0 {
-		o.MemTableSize = 4 << 20 // 4 MB
+		o.MemTableSize = 1 << 20 // 4 MB
 	}
 	if o.MemTableStopWritesThreshold <= 0 {
 		o.MemTableStopWritesThreshold = 2
@@ -1250,7 +1250,7 @@ func (o *Options) EnsureDefaults() *Options {
 	}
 
 	// Flip this to true to enable Universal Compaction
-	o.Experimental.EnableUniversalCompaction = false
+	o.Experimental.EnableUniversalCompaction = true
 
 	o.initMaps()
 	return o
