@@ -19,20 +19,33 @@ func TestOpenSharedTableCacheT(t *testing.T) {
 
 	// Load data here ...
 
-	for i := 0; i < 500; i++ {
-		fmt.Println(i)
-		key := generateRandomKey(1000)
-		if err := db.Set(key, generateRandomKey(1000), Sync); err != nil {
-			log.Fatal(err)
+	// initialize keys
+	keys := make([]string, 0)
+
+	// Config ops numbers
+	nOpsSets := 20
+	keyLength := 1000
+	inserts := 6
+	updates := 3
+	deletes := 1
+
+	for j := 0; j < nOpsSets; j++ {
+		fmt.Println(j)
+		for i := 0; i < inserts; i++ {
+			insertOp(db, &keys, keyLength)
 		}
-		_, closer, err := db.Get(key)
-		if err != nil {
-			log.Fatal(err)
+		for i := 0; i < updates; i++ {
+			updateOp(db, &keys)
 		}
-		// fmt.Printf("%s %s\n", key, value)
-		if err := closer.Close(); err != nil {
-			log.Fatal(err)
+		for i := 0; i < deletes; i++ {
+			deleteOp(db, &keys)
 		}
+
+	}
+
+	// close db
+	if err := db.Close(); err != nil {
+		log.Fatal(err)
 	}
 
 	// Make sure that the Open function is using the passed in table cache
@@ -49,4 +62,43 @@ func generateRandomKey(keyLength int) []byte {
 		s[i] = byte(rand.Intn(58) + 65)
 	}
 	return s
+}
+
+func updateOp(d *DB, keys *[]string) {
+	fmt.Println("update")
+	nkeys := len(*keys)
+	selectedKey := ""
+	for {
+		selectedKey := (*keys)[rand.Intn(nkeys-1)]
+		if selectedKey != "deleted" {
+			break
+		}
+	}
+
+	key := []byte(selectedKey)
+	if err := d.Set(key, generateRandomKey(10), Sync); err != nil {
+		log.Fatal(err)
+	}
+
+}
+
+func insertOp(d *DB, keys *[]string, keyLength int) {
+	fmt.Println("insert")
+	key := generateRandomKey(keyLength)
+	if err := d.Set(key, generateRandomKey(keyLength), Sync); err != nil {
+		log.Fatal(err)
+	}
+	*keys = append(*keys, string(key))
+}
+
+func deleteOp(d *DB, keys *[]string) {
+	fmt.Println("delete")
+	nkeys := len(*keys)
+	index := rand.Intn(nkeys - 1)
+	(*keys)[index] = "deleted"
+	selectedKey := (*keys)[index]
+	key := []byte(selectedKey)
+	if err := d.Delete(key, Sync); err != nil {
+		log.Fatal(err)
+	}
 }
