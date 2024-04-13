@@ -9,8 +9,8 @@ import (
 )
 
 // The main type definition for the Universal Compaction Picker.
-// This type holds the state required for compaction picking
-// and implements the compactionPicker interface
+// This type holds the state and implements the methods required
+// for compaction picking
 type compactionPickerUniversal struct {
 	opts *Options
 	vers *version
@@ -70,7 +70,7 @@ type sortedRunInfo struct {
 // Pick a compaction based on Universal Compaction logic.
 // This is the main entry point for Universal Compaction Picker and it returns the
 // picked compaction.
-func (p *compactionPickerUniversal) pickAuto(env compactionEnv) (pc *pickedCompaction) {
+func (p *compactionPickerUniversal) pickUniversalCompaction(env compactionEnv) (pc *pickedCompaction) {
 
 	// There are 4 different sub cases for Universal Compaction. Currently
 	// we've only implemented one - Periodic Compaction.
@@ -165,7 +165,7 @@ func (p *compactionPickerUniversal) computeFilesMarkedForPeriodicCompaction() {
 	// For now, hardcode a value for the value for the periodic compaction
 	// interval
 	// [TODO] Add this to options
-	periodicCompactionsSeconds := int64(1)
+	periodicCompactionsSeconds := int64(3)
 
 	// Clear the current slice of files
 	p.filesMarkedForPeriodicCompaction = []levelFileMetadata{}
@@ -283,7 +283,31 @@ func (p *compactionPickerUniversal) pickPeriodicCompaction() (pc *pickedCompacti
 func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex, endIndex int) (pc *pickedCompaction) {
 
 	startLevel := p.sortedRuns[startIndex].level
-	outputLevel := p.sortedRuns[endIndex].level
+	if startLevel == numLevels-1 {
+		// We don't support compactions originating from the last level
+		// (Elision only compactions) for Universal compaction.
+		return nil
+	}
+
+	// If we are compacting all the sorted runs, we just output it to the last
+	// level. Otherwise we compact them into the highest level greater than or
+	// equal to the highest level run being compacted but lower than the level
+	// of the first sorted run that is not being compacted.
+	// For instance say we are compacting sorted runs in L0, L1 and L2. L3 and
+	// L4 are empty and L5 is a sorted run that is not being compacted,
+	// we set the output level to L4.
+	var outputLevel int
+	if endIndex == len(p.sortedRuns)-1 {
+		outputLevel = numLevels - 1
+	} else {
+		// If we are only compacting sorted runs in L0, but we cannot compact
+		// all of them, we just skip the compaction. That is, we don't do
+		// an intra L0 compaction.
+		if p.sortedRuns[endIndex].level == 0 {
+			return nil
+		}
+		outputLevel = p.sortedRuns[endIndex+1].level - 1
+	}
 
 	if startLevel > 0 && startLevel < p.baseLevel {
 		panic(fmt.Sprintf("invalid compaction: start level %d should not be empty (base level %d)",
@@ -346,7 +370,7 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 	// Proceed with the sorted runs in level > 0. Each level
 	// is a sorted run and has a separate compactionLevel object
 	levelIters := make([]manifest.LevelIterator, 0)
-	for i <= endIndex {
+	for ; i <= endIndex; i++ {
 		cl := compactionLevel{
 			level: p.sortedRuns[i].level,
 
@@ -378,6 +402,16 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 		panic("invalid compaction: no input files to compact")
 	}
 
+	// If the output level that we calculated above is on a higher numbered level
+	// than the last entry in inputs, then we add another entry for this level.
+	// The 'files' field in this entry will be an empty slice.
+	if outputLevel != inputs[len(inputs)-1].level {
+		cl := compactionLevel{
+			level: outputLevel,
+		}
+		inputs = append(inputs, cl)
+	}
+
 	// Set up the corresponding fields in the picked compaction object
 	pc.inputs = inputs
 	pc.startLevel = &pc.inputs[0]
@@ -406,40 +440,4 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 
 	return pc
 
-}
-
-// Enforce at compile time that compactionPickerUniversal
-// implements compactionPicker interface
-var _ compactionPicker = &compactionPickerUniversal{}
-
-// Many methods in the compactionPicker interface are irrelevant
-// to Universal compaction. We just panic if these methods
-// are invoked with a Universal Compaction picker instance
-
-func (p *compactionPickerUniversal) estimatedCompactionDebt(l0ExtraSize uint64) uint64 {
-	panic("unimplemented")
-}
-
-func (p *compactionPickerUniversal) forceBaseLevel1() {
-	panic("unimplemented")
-}
-
-func (p *compactionPickerUniversal) getBaseLevel() int {
-	panic("unimplemented")
-}
-
-func (p *compactionPickerUniversal) getScores([]compactionInfo) [7]float64 {
-	panic("unimplemented")
-}
-
-func (p *compactionPickerUniversal) pickElisionOnlyCompaction(env compactionEnv) (pc *pickedCompaction) {
-	panic("unimplemented")
-}
-
-func (p *compactionPickerUniversal) pickReadTriggeredCompaction(env compactionEnv) (pc *pickedCompaction) {
-	panic("unimplemented")
-}
-
-func (p *compactionPickerUniversal) pickRewriteCompaction(env compactionEnv) (pc *pickedCompaction) {
-	panic("unimplemented")
 }

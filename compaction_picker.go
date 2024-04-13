@@ -577,24 +577,6 @@ func anyTablesCompacting(inputs manifest.LevelSlice) bool {
 	return false
 }
 
-func newCompactionPicker(
-	v *version,
-	virtualBackings *manifest.VirtualBackings,
-	opts *Options,
-	inProgressCompactions []compactionInfo,
-) compactionPicker {
-	if opts.Experimental.EnableUniversalCompaction {
-		p := &compactionPickerUniversal{
-			opts: opts,
-			vers: v,
-		}
-		return p
-	} else {
-		return newCompactionPickerByScore(v, virtualBackings, opts, inProgressCompactions)
-	}
-
-}
-
 // newCompactionPickerByScore creates a compactionPickerByScore associated with
 // the newest version. The picker is used under logLock (until a new version is
 // installed).
@@ -1214,6 +1196,15 @@ func responsibleForGarbageBytes(virtualBackings *manifest.VirtualBackings, m *fi
 // If a score-based compaction cannot be found, pickAuto falls back to looking
 // for an elision-only compaction to remove obsolete keys.
 func (p *compactionPickerByScore) pickAuto(env compactionEnv) (pc *pickedCompaction) {
+
+	if p.opts.Experimental.EnableUniversalCompaction {
+		ucp := &compactionPickerUniversal{
+			opts: p.opts,
+			vers: p.vers,
+		}
+		return ucp.pickUniversalCompaction(env)
+	}
+
 	// Compaction concurrency is controlled by L0 read-amp. We allow one
 	// additional compaction per L0CompactionConcurrency sublevels, as well as
 	// one additional compaction per CompactionDebtConcurrency bytes of
