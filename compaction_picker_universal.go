@@ -84,12 +84,22 @@ func (p *compactionPickerUniversal) pickUniversalCompaction(env compactionEnv) (
 
 	// Compute the sorted runs available for compaction
 	p.computeSortedRuns(env)
+	if len(p.sortedRuns) == 0 {
+		return nil
+	}
 
 	// Set up the files that are marked for universal compaction.
 	p.computeFilesForUniversalCompaction()
 
-	return p.pickPeriodicCompaction()
+	if pc := p.pickPeriodicCompaction(); pc != nil {
+		return pc
+	}
 
+	if pc := p.pickCompactionToReduceSizeAmp(); pc != nil {
+		return pc
+	}
+
+	return nil
 }
 
 // Compute the sorted runs in the version associated with the
@@ -274,13 +284,60 @@ func (p *compactionPickerUniversal) pickPeriodicCompaction() (pc *pickedCompacti
 
 	}
 
-	return p.pickCompactionWithSortedRunRange(startIndex, len(p.sortedRuns)-1)
+	return p.pickCompactionWithSortedRunRange(startIndex, len(p.sortedRuns)-1, compactionKindUniversalPeriodic)
+
+}
+
+func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedCompaction) {
+	if len(p.sortedRuns) == 0 {
+		panic("pickCompactionToReduceSizeAmp: No sorted runs to compact")
+	}
+
+	endIndex := len(p.sortedRuns) - 1
+	if p.sortedRuns[endIndex].beingCompacted {
+		// If the last sorted run is being compacted, we just skip the compaction
+		return nil
+	}
+
+	baseSRSize := p.sortedRuns[endIndex].size
+	candidateSize := uint64(0)
+
+	startIndex := endIndex
+	for startIndex > 0 {
+		sr := p.sortedRuns[startIndex-1]
+		if sr.beingCompacted {
+			fmt.Printf("Universal Compaction: Stopping at sorted run undergoing compaction at index %d.", startIndex-1)
+			break
+		}
+
+		candidateSize += sr.compensatedFileSize
+		startIndex--
+	}
+
+	if startIndex == endIndex {
+		return nil
+	}
+
+	// TODO: RocksDB has an additional optimization to exclude some L0 files from compaction.
+	// This is to prevent a large number of L0 files from being locked by a size amp compaction,
+	// potentially leading to write stop with a few more flushes.
+
+	// For now, hardcode a value for the value for max size amp percentage
+	// [TODO] Add this to options
+	maxSizeAmpPercent := uint64(25)
+
+	if candidateSize*100 < maxSizeAmpPercent*baseSRSize {
+		fmt.Println("Universal Compaction: Not required, size amp is under threshold.")
+		return nil
+	}
+
+	return p.pickCompactionWithSortedRunRange(startIndex, endIndex, compactionKindUniversalSizeAmp)
 
 }
 
 // Pick and return a compaction given the start and end indices of the sorted run list.
 // Returns nil if a compaction could not be picked.
-func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex, endIndex int) (pc *pickedCompaction) {
+func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex, endIndex int, kind compactionKind) (pc *pickedCompaction) {
 
 	startLevel := p.sortedRuns[startIndex].level
 	if startLevel == numLevels-1 {
@@ -428,7 +485,7 @@ func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex,
 		pc.extraLevels = extraLevels
 	}
 
-	pc.kind = compactionKindUniversalPeriodic
+	pc.kind = kind
 
 	// TODO: Verify if we need to set any of these fields to be set
 	// We are not setting the following fields because they don't seem to

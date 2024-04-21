@@ -152,8 +152,9 @@ const (
 	compactionKindRewrite
 	compactionKindIngestedFlushable
 
-	// Periodic compaction picked by the Universal Compaction Picker
+	// Compactions picked by the Universal Compaction Picker
 	compactionKindUniversalPeriodic
+	compactionKindUniversalSizeAmp
 )
 
 func (k compactionKind) String() string {
