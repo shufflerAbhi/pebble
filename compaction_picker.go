@@ -308,20 +308,21 @@ func newPickedCompactionFromL0(
 
 func (pc *pickedCompaction) String() string {
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf(`Score=%f, `, pc.score))
-	builder.WriteString(fmt.Sprintf(`Kind=%s, `, pc.kind))
-	builder.WriteString(fmt.Sprintf(`AdjustedOutputLevel=%d, `, adjustedOutputLevel(pc.outputLevel.level, pc.baseLevel)))
-	builder.WriteString(fmt.Sprintf(`maxOutputFileSize=%d, `, pc.maxOutputFileSize))
-	builder.WriteString(fmt.Sprintf(`maxReadCompactionBytes=%d, `, pc.maxReadCompactionBytes))
-	builder.WriteString(fmt.Sprintf(`smallest=%s, `, pc.smallest))
-	builder.WriteString(fmt.Sprintf(`largest=%s, `, pc.largest))
-	builder.WriteString(fmt.Sprintf(`version=%s, `, pc.version))
-	builder.WriteString(fmt.Sprintf(`inputs=%s, `, pc.inputs))
-	builder.WriteString(fmt.Sprintf(`startlevel=%s, `, pc.startLevel))
-	builder.WriteString(fmt.Sprintf(`outputLevel=%s, `, pc.outputLevel))
-	builder.WriteString(fmt.Sprintf(`extraLevels=%s, `, pc.extraLevels))
-	builder.WriteString(fmt.Sprintf(`l0SublevelInfo=%s, `, pc.startLevel.l0SublevelInfo))
-	builder.WriteString(fmt.Sprintf(`lcf=%s`, pc.lcf))
+	// builder.WriteString(fmt.Sprintf(`Score=%f, `, pc.score))
+	// builder.WriteString(fmt.Sprintf(`Kind=%s, `, pc.kind))
+	// builder.WriteString(fmt.Sprintf(`AdjustedOutputLevel=%d, `, adjustedOutputLevel(pc.outputLevel.level, pc.baseLevel)))
+	// builder.WriteString(fmt.Sprintf(`maxOutputFileSize=%d, `, pc.maxOutputFileSize))
+	// builder.WriteString(fmt.Sprintf(`maxReadCompactionBytes=%d, `, pc.maxReadCompactionBytes))
+	// builder.WriteString(fmt.Sprintf(`smallest=%s, `, pc.smallest))
+	// builder.WriteString(fmt.Sprintf(`largest=%s, `, pc.largest))
+	builder.WriteString(fmt.Sprintf(`kind=%d `, pc.kind))
+	// builder.WriteString(fmt.Sprintf(`version=%s, `, pc.version))
+	// builder.WriteString(fmt.Sprintf(`inputs=%s, `, pc.inputs))
+	builder.WriteString(fmt.Sprintf(`startlevel=%d, `, pc.startLevel.level))
+	builder.WriteString(fmt.Sprintf(`outputLevel=%d, `, pc.outputLevel.level))
+	// builder.WriteString(fmt.Sprintf(`extraLevels=%s, `, pc.extraLevels))
+	// builder.WriteString(fmt.Sprintf(`l0SublevelInfo=%s, `, pc.startLevel.l0SublevelInfo))
+	// builder.WriteString(fmt.Sprintf(`lcf=%s`, pc.lcf))
 	return builder.String()
 }
 
@@ -1198,6 +1199,8 @@ func responsibleForGarbageBytes(virtualBackings *manifest.VirtualBackings, m *fi
 func (p *compactionPickerByScore) pickAuto(env compactionEnv) (pc *pickedCompaction) {
 
 	if p.opts.Experimental.EnableUniversalCompaction {
+		logger := DefaultLogger
+		logger.Infof("Running Univeresal Compaction")
 		ucp := &compactionPickerUniversal{
 			opts: p.opts,
 			vers: p.vers,

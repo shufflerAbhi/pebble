@@ -1902,7 +1902,12 @@ func (d *DB) maybeScheduleCompaction() {
 }
 
 func pickAuto(picker compactionPicker, env compactionEnv) *pickedCompaction {
-	return picker.pickAuto(env)
+	pc := picker.pickAuto(env)
+	if pc != nil {
+		logger := DefaultLogger
+		logger.Infof(pc.String())
+	}
+	return pc
 }
 
 func pickElisionOnly(picker compactionPicker, env compactionEnv) *pickedCompaction {
