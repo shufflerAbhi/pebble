@@ -55,7 +55,7 @@ type sortedRunInfo struct {
 	// compensated size of a single file.
 	size uint64
 
-	// compensatedFileSize is a measure of the delete entries in the file.
+	// compensatedFileSize is a measure of file size + the delete entries in the file.
 	// The higher this value, the more beneficial it is if this file is
 	// picked for compaction.
 	compensatedFileSize uint64
@@ -65,6 +65,44 @@ type sortedRunInfo struct {
 	// if a single file in a sorted run is being compacted, we consider
 	// the whole
 	beingCompacted bool
+}
+
+func (p *compactionPickerUniversal) pickGlobalCompaction(env compactionEnv) (pc *pickedCompaction) {
+
+	fmt.Println("In pickGlobalCompaction")
+
+	// Compute the sorted runs available for compaction
+	p.computeSortedRuns(env)
+	if len(p.sortedRuns) == 0 {
+		fmt.Println("pickGlobalCompaction: Empty sorted run")
+		return nil
+	} else {
+		fmt.Printf("Length of sorted run: %d\n", len(p.sortedRuns))
+	}
+
+	// Start looking from the last sorted run till we find a sorted run
+	// containing files that are already being compacted.
+	startIndex := len(p.sortedRuns)
+	for startIndex > 0 && !p.sortedRuns[startIndex-1].beingCompacted {
+		startIndex--
+	}
+
+	// Even the very last sorted run is already being compacted.
+	// We do not proceed with our compaction
+	if startIndex == len(p.sortedRuns) {
+		fmt.Println("pickGlobalCompaction: Last sorted run being compacted")
+		return nil
+	}
+
+	fmt.Printf("pickGlobalCompaction: startIndex: %d\n", startIndex)
+	if pc = p.pickCompactionWithSortedRunRange(startIndex, len(p.sortedRuns)-1, compactionKindUniversalGlobal); pc != nil {
+		fmt.Printf("pickGlobalCompaction: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
+		return pc
+	}
+
+	fmt.Println("pickGlobalCompaction: No compaction picked")
+	return nil
+
 }
 
 // Pick a compaction based on Universal Compaction logic.
@@ -88,15 +126,21 @@ func (p *compactionPickerUniversal) pickUniversalCompaction(env compactionEnv) (
 		return nil
 	}
 
-	// Set up the files that are marked for universal compaction.
-	p.computeFilesForUniversalCompaction()
+	if p.opts.Experimental.EnablePeriodicUniversalCompaction {
+		// Set up the files that are marked for universal compaction.
+		p.computeFilesForUniversalCompaction()
 
-	if pc := p.pickPeriodicCompaction(); pc != nil {
-		return pc
+		if pc := p.pickPeriodicCompaction(); pc != nil {
+			return pc
+		}
+
 	}
 
-	if pc := p.pickCompactionToReduceSizeAmp(); pc != nil {
-		return pc
+	if p.opts.Experimental.EnableSizeAmpUniversalCompaction {
+
+		if pc := p.pickCompactionToReduceSizeAmp(); pc != nil {
+			return pc
+		}
 	}
 
 	return nil
@@ -120,7 +164,7 @@ func (p *compactionPickerUniversal) computeSortedRuns(env compactionEnv) {
 				level:               0,
 				file:                f,
 				size:                f.Size,
-				compensatedFileSize: fileCompensation(f),
+				compensatedFileSize: compensatedSize(f),
 				beingCompacted:      f.IsCompacting(),
 			}
 			p.sortedRuns = append(p.sortedRuns, sortedRun)
@@ -289,6 +333,8 @@ func (p *compactionPickerUniversal) pickPeriodicCompaction() (pc *pickedCompacti
 }
 
 func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedCompaction) {
+	fmt.Println("pickCompactionToReduceSizeAmp")
+
 	if len(p.sortedRuns) == 0 {
 		panic("pickCompactionToReduceSizeAmp: No sorted runs to compact")
 	}
@@ -296,6 +342,7 @@ func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedC
 	endIndex := len(p.sortedRuns) - 1
 	if p.sortedRuns[endIndex].beingCompacted {
 		// If the last sorted run is being compacted, we just skip the compaction
+		fmt.Println("pickCompactionToReduceSizeAmp: Last sorted run being compacted")
 		return nil
 	}
 
@@ -315,6 +362,7 @@ func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedC
 	}
 
 	if startIndex == endIndex {
+		fmt.Println("pickCompactionToReduceSizeAmp: startIndex == endIndex")
 		return nil
 	}
 
@@ -327,11 +375,18 @@ func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedC
 	maxSizeAmpPercent := uint64(25)
 
 	if candidateSize*100 < maxSizeAmpPercent*baseSRSize {
-		fmt.Println("Universal Compaction: Not required, size amp is under threshold.")
+		fmt.Printf("Universal Compaction: Not required, size amp is under threshold. baseSR: %d, candidateSize: %d\n", baseSRSize, candidateSize)
 		return nil
 	}
 
-	return p.pickCompactionWithSortedRunRange(startIndex, endIndex, compactionKindUniversalSizeAmp)
+	fmt.Printf("pickCompactionToReduceSizeAmp: startIndex: %d, endIndex: %d\n", startIndex, endIndex)
+	if pc = p.pickCompactionWithSortedRunRange(startIndex, endIndex, compactionKindUniversalSizeAmp); pc != nil {
+		fmt.Printf("pickCompactionToReduceSizeAmp: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
+		return pc
+	}
+
+	fmt.Println("pickCompactionToReduceSizeAmp: No compaction picked")
+	return nil
 
 }
 

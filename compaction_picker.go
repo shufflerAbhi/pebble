@@ -1197,10 +1197,11 @@ func responsibleForGarbageBytes(virtualBackings *manifest.VirtualBackings, m *fi
 // for an elision-only compaction to remove obsolete keys.
 func (p *compactionPickerByScore) pickAuto(env compactionEnv) (pc *pickedCompaction) {
 
-	if p.opts.Experimental.EnableUniversalCompaction {
+	if p.opts.Experimental.EnablePeriodicUniversalCompaction || p.opts.Experimental.EnableSizeAmpUniversalCompaction {
 		ucp := &compactionPickerUniversal{
-			opts: p.opts,
-			vers: p.vers,
+			opts:      p.opts,
+			vers:      p.vers,
+			baseLevel: p.baseLevel,
 		}
 		return ucp.pickUniversalCompaction(env)
 	}

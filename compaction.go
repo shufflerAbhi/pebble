@@ -155,6 +155,7 @@ const (
 	// Compactions picked by the Universal Compaction Picker
 	compactionKindUniversalPeriodic
 	compactionKindUniversalSizeAmp
+	compactionKindUniversalGlobal
 )
 
 func (k compactionKind) String() string {
@@ -891,9 +892,9 @@ func (c *compaction) newInputIter(
 			}
 		}
 		if len(c.extraLevels) > 0 {
-			if len(c.extraLevels) > 1 {
-				panic("n>2 multi level compaction not implemented yet")
-			}
+			// if len(c.extraLevels) > 1 {
+			// 	panic("n>2 multi level compaction not implemented yet")
+			// }
 			interLevel := c.extraLevels[0]
 			err := manifest.CheckOrdering(c.cmp, c.formatKey,
 				manifest.Level(interLevel.level), interLevel.files.Iter())
