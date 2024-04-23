@@ -67,6 +67,56 @@ type sortedRunInfo struct {
 	beingCompacted bool
 }
 
+func (p *compactionPickerUniversal) pickGlobalLevelCompaction(env compactionEnv) (pc *pickedCompaction) {
+	p.computeSortedRuns(env)
+	if len(p.sortedRuns) == 0 {
+		fmt.Println("pickGlobalLevelCompaction: Empty sorted run")
+		return nil
+	} else {
+		fmt.Printf("Length of sorted run: %d\n", len(p.sortedRuns))
+	}
+
+	if len(p.sortedRuns) == 1 {
+		fmt.Printf("pickGlobalLevelCompaction: only one sorted run\n")
+		if pc = p.pickCompactionWithSortedRunRange(0, 0, compactionKindUniversalGlobal); pc != nil {
+			fmt.Printf("pickGlobalLevelCompaction: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
+			return pc
+		}
+	}
+
+	if p.sortedRuns[0].level > 0 {
+		fmt.Printf("pickGlobalLevelCompaction: picking first 2 sorted runs\n")
+		if pc = p.pickCompactionWithSortedRunRange(0, 1, compactionKindUniversalGlobal); pc != nil {
+			fmt.Printf("pickGlobalLevelCompaction: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
+			return pc
+		}
+	} else {
+		endIndex := 1
+		for endIndex < len(p.sortedRuns) {
+			if p.sortedRuns[endIndex].level != 0 {
+				fmt.Printf("pickGlobalLevelCompaction: startIndex: %d, endIndex: %d\n", 0, endIndex)
+				if pc = p.pickCompactionWithSortedRunRange(0, endIndex, compactionKindUniversalGlobal); pc != nil {
+					fmt.Printf("pickGlobalLevelCompaction: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
+				} else {
+					fmt.Println("pickGlobalLevelCompaction: No compaction picked")
+				}
+				return pc
+			}
+			endIndex++
+		}
+		fmt.Printf("pickGlobalLevelCompaction: All sorted runs in L0. startIndex: %d, endIndex: %d\n", 0, len(p.sortedRuns)-1)
+		if pc = p.pickCompactionWithSortedRunRange(0, len(p.sortedRuns)-1, compactionKindUniversalGlobal); pc != nil {
+			fmt.Printf("pickGlobalLevelCompaction: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
+			return pc
+		}
+
+	}
+
+	fmt.Println("pickGlobalLevelCompaction: No compaction picked")
+	return nil
+
+}
+
 func (p *compactionPickerUniversal) pickGlobalCompaction(env compactionEnv) (pc *pickedCompaction) {
 
 	fmt.Println("In pickGlobalCompaction")
@@ -131,6 +181,7 @@ func (p *compactionPickerUniversal) pickUniversalCompaction(env compactionEnv) (
 		p.computeFilesForUniversalCompaction()
 
 		if pc := p.pickPeriodicCompaction(); pc != nil {
+			fmt.Printf("pickGlobalCompaction: Compaction picked. StartLevel: %d, EndLevel: %d\n", pc.startLevel.level, pc.outputLevel.level)
 			return pc
 		}
 
@@ -216,10 +267,7 @@ func (p *compactionPickerUniversal) computeFilesForUniversalCompaction() {
 // associated state variable in the compaction picker.
 func (p *compactionPickerUniversal) computeFilesMarkedForPeriodicCompaction() {
 
-	// For now, hardcode a value for the value for the periodic compaction
-	// interval
-	// [TODO] Add this to options
-	periodicCompactionsSeconds := int64(3)
+	periodicCompactionsSeconds := p.opts.Experimental.PeriodicCompactionTimeInSeconds
 
 	// Clear the current slice of files
 	p.filesMarkedForPeriodicCompaction = []levelFileMetadata{}
@@ -293,39 +341,36 @@ func (p *compactionPickerUniversal) pickPeriodicCompaction() (pc *pickedCompacti
 	// [Q] How exactly does this prevent compacting the same single level
 	// over and over again?
 
-	// Check if we have only 1 sorted run to compact
-	if startIndex == len(p.sortedRuns)-1 {
-		startLevel := p.sortedRuns[startIndex].level
-		startFile := p.sortedRuns[startIndex].file
+	startLevel := p.sortedRuns[startIndex].level
+	startFile := p.sortedRuns[startIndex].file
 
-		// We have to iterate through the files picked for compaction
-		// to see if final sorted run includes a file marked for compaction
-		markedFileIncluded := false
-		for _, lf := range p.filesMarkedForPeriodicCompaction {
-			file := lf.FileMetadata
-			level := lf.level
+	// We have to iterate through the files picked for compaction
+	// to see if final sorted run includes a file marked for compaction
+	markedFileIncluded := false
+	for _, lf := range p.filesMarkedForPeriodicCompaction {
+		file := lf.FileMetadata
+		level := lf.level
 
-			// The last sorted run could be an L0 file or
-			// an entire non-l0 level. We treat both
-			// cases separately
-			if startLevel != 0 {
-				// Last sorted run is an entire non-l0 level
-				if startLevel == level {
-					markedFileIncluded = true
-					break
-				}
-			} else {
-				if startFile == file {
-					markedFileIncluded = true
-					break
-				}
+		// The last sorted run could be an L0 file or
+		// an entire non-l0 level. We treat both
+		// cases separately
+		if startLevel != 0 {
+			// Last sorted run is an entire non-l0 level
+			if startLevel == level {
+				markedFileIncluded = true
+				break
+			}
+		} else {
+			if startFile == file {
+				markedFileIncluded = true
+				break
 			}
 		}
+	}
 
-		if !markedFileIncluded {
-			return nil
-		}
-
+	if !markedFileIncluded {
+		fmt.Println("pickPeriodicCompaction: No compaction picked because no marked files were included")
+		return nil
 	}
 
 	return p.pickCompactionWithSortedRunRange(startIndex, len(p.sortedRuns)-1, compactionKindUniversalPeriodic)
@@ -370,9 +415,7 @@ func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedC
 	// This is to prevent a large number of L0 files from being locked by a size amp compaction,
 	// potentially leading to write stop with a few more flushes.
 
-	// For now, hardcode a value for the value for max size amp percentage
-	// [TODO] Add this to options
-	maxSizeAmpPercent := uint64(25)
+	maxSizeAmpPercent := p.opts.Experimental.UniversalCompactionSizeAmpThreshold
 
 	if candidateSize*100 < maxSizeAmpPercent*baseSRSize {
 		fmt.Printf("Universal Compaction: Not required, size amp is under threshold. baseSR: %d, candidateSize: %d\n", baseSRSize, candidateSize)
@@ -393,6 +436,13 @@ func (p *compactionPickerUniversal) pickCompactionToReduceSizeAmp() (pc *pickedC
 // Pick and return a compaction given the start and end indices of the sorted run list.
 // Returns nil if a compaction could not be picked.
 func (p *compactionPickerUniversal) pickCompactionWithSortedRunRange(startIndex, endIndex int, kind compactionKind) (pc *pickedCompaction) {
+
+	for i := startIndex; i <= endIndex; i++ {
+		if p.sortedRuns[i].beingCompacted {
+			fmt.Println("pickCompactionWithSortedRunRange: No compaction picked because a sorted run included is already compacting")
+			return nil
+		}
+	}
 
 	startLevel := p.sortedRuns[startIndex].level
 	if startLevel == numLevels-1 {

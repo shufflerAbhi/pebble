@@ -1747,7 +1747,14 @@ func (d *DB) Compact(start, end []byte, parallelize bool) error {
 		// fmt.Println("Version used for compaction picking.")
 		// fmt.Println(vs.currentVersion().String())
 
-		if pc := ucp.pickGlobalCompaction(env); pc != nil {
+		var pc *pickedCompaction
+		if vs.opts.Experimental.EnablePeriodicUniversalCompaction || vs.opts.Experimental.EnableSizeAmpUniversalCompaction {
+			pc = ucp.pickGlobalCompaction(env)
+		} else {
+			pc = ucp.pickGlobalLevelCompaction(env)
+		}
+
+		if pc != nil {
 			c := newCompaction(pc, d.opts, d.timeNow(), d.ObjProvider())
 			// fmt.Println("Compact: Created compaction object")
 			d.mu.compact.compactingCount++
