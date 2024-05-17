@@ -606,4 +606,34 @@ func (y *ycsb) done(elapsed time.Duration) {
 		float64(readAmpSum)/float64(readAmpCount),
 		total.WriteAmp(),
 	)
+
+	fmt.Printf("%s", y.db.Metrics())
+
+	y.db.Flush()
+
+	// time.Sleep(30 * time.Second)
+	// fmt.Println("Waiting for 30s before compact")
+
+	y.db.Compact()
+
+	resultHist = resultTick.Cumulative
+	m = y.db.Metrics()
+	total = m.Total()
+
+	readAmpCount = y.readAmpCount.Load()
+	readAmpSum = y.readAmpSum.Load()
+	if readAmpCount == 0 {
+		readAmpSum = 0
+		readAmpCount = 1
+	}
+
+	fmt.Printf("Benchmarkycsb/%s/values=%s %d  %0.1f ops/sec  %d read  %d write  %.2f r-amp  %0.2f w-amp\n\n",
+		ycsbConfig.workload, ycsbConfig.values,
+		resultHist.TotalCount(),
+		float64(resultHist.TotalCount())/elapsed.Seconds(),
+		total.BytesRead,
+		total.BytesFlushed+total.BytesCompacted,
+		float64(readAmpSum)/float64(readAmpCount),
+		total.WriteAmp(),
+	)
 }

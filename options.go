@@ -783,6 +783,12 @@ type Options struct {
 		//   which will later be consumed by SingleDelete#3. The violation will
 		//   not be detected and the DB will be correct.
 		SingleDeleteInvariantViolationCallback func(userKey []byte)
+
+		EnablePeriodicUniversalCompaction bool
+		PeriodicCompactionTimeInSeconds   int64
+
+		EnableSizeAmpUniversalCompaction    bool
+		UniversalCompactionSizeAmpThreshold uint64
 	}
 
 	// Filters is a map from filter policy name to filter policy. It is used for
@@ -1246,6 +1252,13 @@ func (o *Options) EnsureDefaults() *Options {
 	if o.Experimental.MultiLevelCompactionHeuristic == nil {
 		o.Experimental.MultiLevelCompactionHeuristic = WriteAmpHeuristic{}
 	}
+
+	// Flip this to true to enable Universal Compaction
+	o.Experimental.EnablePeriodicUniversalCompaction = false
+	o.Experimental.PeriodicCompactionTimeInSeconds = int64(3)
+
+	o.Experimental.EnableSizeAmpUniversalCompaction = false
+	o.Experimental.UniversalCompactionSizeAmpThreshold = uint64(25)
 
 	o.initMaps()
 	return o

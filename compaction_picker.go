@@ -1196,6 +1196,16 @@ func responsibleForGarbageBytes(virtualBackings *manifest.VirtualBackings, m *fi
 // If a score-based compaction cannot be found, pickAuto falls back to looking
 // for an elision-only compaction to remove obsolete keys.
 func (p *compactionPickerByScore) pickAuto(env compactionEnv) (pc *pickedCompaction) {
+
+	if p.opts.Experimental.EnablePeriodicUniversalCompaction || p.opts.Experimental.EnableSizeAmpUniversalCompaction {
+		ucp := &compactionPickerUniversal{
+			opts:      p.opts,
+			vers:      p.vers,
+			baseLevel: p.baseLevel,
+		}
+		return ucp.pickUniversalCompaction(env)
+	}
+
 	// Compaction concurrency is controlled by L0 read-amp. We allow one
 	// additional compaction per L0CompactionConcurrency sublevels, as well as
 	// one additional compaction per CompactionDebtConcurrency bytes of

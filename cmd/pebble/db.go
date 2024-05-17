@@ -5,6 +5,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/cockroachdb/pebble"
@@ -22,6 +23,7 @@ type DB interface {
 	Scan(iter iterator, key []byte, count int64, reverse bool) error
 	Metrics() *pebble.Metrics
 	Flush() error
+	Compact() error
 }
 
 type iterator interface {
@@ -62,10 +64,10 @@ func newPebbleDB(dir string) DB {
 		FormatMajorVersion:          pebble.FormatNewest,
 		L0CompactionThreshold:       2,
 		L0StopWritesThreshold:       1000,
-		LBaseMaxBytes:               64 << 20, // 64 MB
+		LBaseMaxBytes:               16 << 20, // 64 MB
 		Levels:                      make([]pebble.LevelOptions, 7),
 		MaxOpenFiles:                16384,
-		MemTableSize:                64 << 20,
+		MemTableSize:                4 << 20,
 		MemTableStopWritesThreshold: 4,
 		Merger: &pebble.Merger{
 			Name: "cockroach_merge_operator",
@@ -128,6 +130,11 @@ func newPebbleDB(dir string) DB {
 
 func (p pebbleDB) Flush() error {
 	return p.d.Flush()
+}
+
+func (p pebbleDB) Compact() error {
+	fmt.Println("In Outer Compact")
+	return p.d.Compact(nil, nil, false)
 }
 
 func (p pebbleDB) NewIter(opts *pebble.IterOptions) iterator {

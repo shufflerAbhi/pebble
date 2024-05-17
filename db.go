@@ -1722,94 +1722,185 @@ func (d *DB) Close() error {
 
 // Compact the specified range of keys in the database.
 func (d *DB) Compact(start, end []byte, parallelize bool) error {
-	if err := d.closed.Load(); err != nil {
-		panic(err)
-	}
-	if d.opts.ReadOnly {
-		return ErrReadOnly
-	}
-	if d.cmp(start, end) >= 0 {
-		return errors.Errorf("Compact start %s is not less than end %s",
-			d.opts.Comparer.FormatKey(start), d.opts.Comparer.FormatKey(end))
-	}
+	fmt.Println("In inner Compact")
 
-	d.mu.Lock()
-	maxLevelWithFiles := 1
-	cur := d.mu.versions.currentVersion()
-	for level := 0; level < numLevels; level++ {
-		overlaps := cur.Overlaps(level, base.UserKeyBoundsInclusive(start, end))
-		if !overlaps.Empty() {
-			maxLevelWithFiles = level + 1
+	needsGlobalCompaction := true
+
+	for needsGlobalCompaction {
+		fmt.Println("Trying to pick a global compaction")
+
+		d.mu.Lock()
+		d.mu.versions.logLock()
+
+		vs := d.mu.versions
+		env := compactionEnv{
+			diskAvailBytes:          d.diskAvailBytes.Load(),
+			earliestSnapshotSeqNum:  d.mu.snapshots.earliest(),
+			earliestUnflushedSeqNum: d.getEarliestUnflushedSeqNumLocked(),
 		}
-	}
+		ucp := &compactionPickerUniversal{
+			opts:      vs.opts,
+			vers:      vs.currentVersion(),
+			baseLevel: vs.picker.getBaseLevel(),
+		}
 
-	// Determine if any memtable overlaps with the compaction range. We wait for
-	// any such overlap to flush (initiating a flush if necessary).
-	mem, err := func() (*flushableEntry, error) {
-		// Check to see if any files overlap with any of the memtables. The queue
-		// is ordered from oldest to newest with the mutable memtable being the
-		// last element in the slice. We want to wait for the newest table that
-		// overlaps.
-		for i := len(d.mu.mem.queue) - 1; i >= 0; i-- {
-			mem := d.mu.mem.queue[i]
-			var anyOverlaps bool
-			mem.computePossibleOverlaps(func(b bounded) shouldContinue {
-				anyOverlaps = true
-				return stopIteration
-			}, KeyRange{Start: start, End: end})
-			if !anyOverlaps {
-				continue
+		// fmt.Println("Version used for compaction picking.")
+		// fmt.Println(vs.currentVersion().String())
+
+		var pc *pickedCompaction
+		if vs.opts.Experimental.EnablePeriodicUniversalCompaction || vs.opts.Experimental.EnableSizeAmpUniversalCompaction {
+			pc = ucp.pickGlobalCompaction(env)
+		} else {
+			pc = ucp.pickGlobalLevelCompaction(env)
+		}
+
+		if pc != nil {
+			c := newCompaction(pc, d.opts, d.timeNow(), d.ObjProvider())
+			// fmt.Println("Compact: Created compaction object")
+			d.mu.compact.compactingCount++
+			d.addInProgressCompaction(c)
+
+			// Release the log lock because compact1 will acquire it internally
+			d.mu.versions.logUnlock()
+			// fmt.Println("Compact: Proceeding to compact1")
+			if err := d.compact1(c, nil); err != nil {
+				fmt.Println("Compact: Error from compact1.")
+				// TODO(peter): count consecutive compaction errors and backoff.
+				d.opts.EventListener.BackgroundError(err)
 			}
-			var err error
-			if mem.flushable == d.mu.mem.mutable {
-				// We have to hold both commitPipeline.mu and DB.mu when calling
-				// makeRoomForWrite(). Lock order requirements elsewhere force us to
-				// unlock DB.mu in order to grab commitPipeline.mu first.
-				d.mu.Unlock()
-				d.commit.mu.Lock()
-				d.mu.Lock()
-				defer d.commit.mu.Unlock()
-				if mem.flushable == d.mu.mem.mutable {
-					// Only flush if the active memtable is unchanged.
-					err = d.makeRoomForWrite(nil)
-				}
+
+			// Acquire it back again so that we can be sure about holding
+			// the lock after exiting this block
+			d.mu.versions.logLock()
+
+			// fmt.Println("Compact: completed compact1")
+			// fmt.Println("Version after compaction.")
+			// fmt.Println(vs.currentVersion().String())
+
+			d.mu.compact.compactingCount--
+			delete(d.mu.compact.inProgress, c)
+			// Add this compaction's duration to the cumulative duration. NB: This
+			// must be atomic with the above removal of c from
+			// d.mu.compact.InProgress to ensure Metrics.Compact.Duration does not
+			// miss or double count a completing compaction's duration.
+			d.mu.compact.duration += d.timeNow().Sub(c.beganAt)
+			d.mu.compact.cond.Broadcast()
+
+		}
+
+		needsGlobalCompaction = false
+		cur := vs.currentVersion()
+		for i := 0; i < numLevels-1; i++ {
+			if !cur.Levels[i].Empty() {
+				needsGlobalCompaction = true
+				break
 			}
-			mem.flushForced = true
-			d.maybeScheduleFlush()
-			return mem, err
 		}
-		return nil, nil
-	}()
+		d.mu.versions.logUnlock()
+		d.mu.Unlock()
 
-	d.mu.Unlock()
+		if needsGlobalCompaction {
+			time.Sleep(5 * time.Second)
+			fmt.Println("Compaction pending. Waiting for 5s before next try")
+		}
 
-	if err != nil {
-		return err
-	}
-	if mem != nil {
-		<-mem.flushed
 	}
 
-	for level := 0; level < maxLevelWithFiles; {
-		for {
-			if err := d.manualCompact(
-				start, end, level, parallelize); err != nil {
-				if errors.Is(err, ErrCancelledCompaction) {
-					continue
-				}
-				return err
-			}
-			break
-		}
-		level++
-		if level == numLevels-1 {
-			// A manual compaction of the bottommost level occurred.
-			// There is no next level to try and compact.
-			break
-		}
-	}
+	fmt.Println("Done with global compaction.")
+
 	return nil
 }
+
+// Compact the specified range of keys in the database.
+// func (d *DB) Compact(start, end []byte, parallelize bool) error {
+// 	if err := d.closed.Load(); err != nil {
+// 		panic(err)
+// 	}
+// 	if d.opts.ReadOnly {
+// 		return ErrReadOnly
+// 	}
+// 	if d.cmp(start, end) >= 0 {
+// 		return errors.Errorf("Compact start %s is not less than end %s",
+// 			d.opts.Comparer.FormatKey(start), d.opts.Comparer.FormatKey(end))
+// 	}
+
+// 	d.mu.Lock()
+// 	maxLevelWithFiles := 1
+// 	cur := d.mu.versions.currentVersion()
+// 	for level := 0; level < numLevels; level++ {
+// 		overlaps := cur.Overlaps(level, base.UserKeyBoundsInclusive(start, end))
+// 		if !overlaps.Empty() {
+// 			maxLevelWithFiles = level + 1
+// 		}
+// 	}
+
+// 	// Determine if any memtable overlaps with the compaction range. We wait for
+// 	// any such overlap to flush (initiating a flush if necessary).
+// 	mem, err := func() (*flushableEntry, error) {
+// 		// Check to see if any files overlap with any of the memtables. The queue
+// 		// is ordered from oldest to newest with the mutable memtable being the
+// 		// last element in the slice. We want to wait for the newest table that
+// 		// overlaps.
+// 		for i := len(d.mu.mem.queue) - 1; i >= 0; i-- {
+// 			mem := d.mu.mem.queue[i]
+// 			var anyOverlaps bool
+// 			mem.computePossibleOverlaps(func(b bounded) shouldContinue {
+// 				anyOverlaps = true
+// 				return stopIteration
+// 			}, KeyRange{Start: start, End: end})
+// 			if !anyOverlaps {
+// 				continue
+// 			}
+// 			var err error
+// 			if mem.flushable == d.mu.mem.mutable {
+// 				// We have to hold both commitPipeline.mu and DB.mu when calling
+// 				// makeRoomForWrite(). Lock order requirements elsewhere force us to
+// 				// unlock DB.mu in order to grab commitPipeline.mu first.
+// 				d.mu.Unlock()
+// 				d.commit.mu.Lock()
+// 				d.mu.Lock()
+// 				defer d.commit.mu.Unlock()
+// 				if mem.flushable == d.mu.mem.mutable {
+// 					// Only flush if the active memtable is unchanged.
+// 					err = d.makeRoomForWrite(nil)
+// 				}
+// 			}
+// 			mem.flushForced = true
+// 			d.maybeScheduleFlush()
+// 			return mem, err
+// 		}
+// 		return nil, nil
+// 	}()
+
+// 	d.mu.Unlock()
+
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if mem != nil {
+// 		<-mem.flushed
+// 	}
+
+// 	for level := 0; level < maxLevelWithFiles; {
+// 		for {
+// 			if err := d.manualCompact(
+// 				start, end, level, parallelize); err != nil {
+// 				if errors.Is(err, ErrCancelledCompaction) {
+// 					continue
+// 				}
+// 				return err
+// 			}
+// 			break
+// 		}
+// 		level++
+// 		if level == numLevels-1 {
+// 			// A manual compaction of the bottommost level occurred.
+// 			// There is no next level to try and compact.
+// 			break
+// 		}
+// 	}
+// 	return nil
+// }
 
 func (d *DB) manualCompact(start, end []byte, level int, parallelize bool) error {
 	d.mu.Lock()
